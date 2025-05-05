@@ -4,3 +4,4 @@ prometheus-fastapi-instrumentator
 minio
 confluent-kafka
 elasticsearch
+python-multipart
