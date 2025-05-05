@@ -1,29 +1,18 @@
 version: "3.9"
 
 services:
-  #zookeeper:
-    #image: bitnami/zookeeper:latest
-    #container_name: tier1_zookeeper
-    #environment:
-      #- ALLOW_ANONYMOUS_LOGIN=yes
-    #ports:
-      #- "2181:2181"
-    #networks:
-      #- tier1-net
-
   kafka:
     image: bitnami/kafka:latest
     container_name: tier1_kafka
-    #depends_on:
-      #- zookeeper
     environment:
-      - KAFKA_CFG_PROCESS_ROLES=broker
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller         # одиночный узел выполняет роль и брокера и контроллера
       - KAFKA_CFG_NODE_ID=1
       - KAFKA_KRAFT_CLUSTER_ID=cluster-1
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@tier1_kafka:9093
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093   # используем имя сервиса kafka
       - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092   # явно рекламируем host kafka для клиентов
       - ALLOW_PLAINTEXT_LISTENER=yes
     ports:
       - "9092:9092"
@@ -75,13 +64,12 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:21.1.1
     container_name: tier1_keycloak
-    depends_on:
-      - elasticsearch   # (Keycloak не зависит от ES, можно убрать; если нужна БД, добавить Postgres)
+    # depends_on: [ ]    # Keycloak не зависит от ES
     environment:
       - KEYCLOAK_ADMIN=admin
       - KEYCLOAK_ADMIN_PASSWORD=admin
     command:
-      - start-dev    # запуск в dev-режиме с встроенной БД
+      - start-dev        # dev-режим с встроенной БД (Realm настроить вручную)
     ports:
       - "8080:8080"
     networks:
@@ -93,17 +81,17 @@ services:
       dockerfile: Dockerfile
     container_name: tier1_ingest
     depends_on:
-      - kafka
+      - kafka       # Kafka должна стартовать до ingest
       - minio
       - elasticsearch
     environment:
-      - KAFKA_BOOTSTRAP=kafka:9092
+      - KAFKA_BOOTSTRAP=kafka:9092        # имя хоста соответствует сервису Kafka
       - MINIO_URL=http://minio:9000
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=admin12345
       - ES_URL=http://elasticsearch:9200
     ports:
-      - "8100:8100"   # эндпойнт приёма данных
+      - "8100:8100"
     networks:
       - tier1-net
 
@@ -121,10 +109,12 @@ services:
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=admin12345
       - ES_URL=http://elasticsearch:9200
-      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      - KEYCLOAK_SERVER_URL=http://host.docker.internal:8080   # URL Keycloak для проверок токена
       - KEYCLOAK_REALM=nica
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "8000:8000"   # REST API endpoints (/tasks, /data, /etc.)
+      - "8000:8000"
     networks:
       - tier1-net
 
@@ -137,7 +127,7 @@ services:
       - api
       - keycloak
     ports:
-      - "3000:80"    # веб-приложение (статически обслуживается nginx на 80 порту внутри)
+      - "3000:80"
     networks:
       - tier1-net
 
