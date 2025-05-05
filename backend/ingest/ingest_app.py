@@ -31,6 +31,10 @@ app = FastAPI(title="Tier-1 Ingest Service")
 # Подключаем инструментатор Prometheus (экспорт /metrics)
 Instrumentator().instrument(app).expose(app)
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 # Маршрут для приёма нового задания
 @app.post("/ingest")
 async def ingest_task(file: UploadFile = File(...), task_name: str = Form(...)):

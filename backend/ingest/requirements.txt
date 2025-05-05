@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+prometheus-fastapi-instrumentator
+minio
+confluent-kafka
+elasticsearch
