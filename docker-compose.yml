@@ -1,0 +1,171 @@
+version: "3.9"
+
+services:
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    container_name: tier1_zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "2181:2181"
+    networks:
+      - tier1-net
+
+  kafka:
+    image: bitnami/kafka:latest
+    container_name: tier1_kafka
+    depends_on:
+      - zookeeper
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - "9092:9092"
+    networks:
+      - tier1-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: tier1_minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=admin12345
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO web console
+    volumes:
+      - minio-data:/data
+    networks:
+      - tier1-net
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
+    container_name: tier1_elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false     # отключаем безопасность для упрощения (без логина)
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m" # ограничение памяти JVM
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - tier1-net
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.10.2
+    container_name: tier1_kibana
+    depends_on:
+      - elasticsearch
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - monitoring.ui.container.elasticsearch.enabled=false
+    ports:
+      - "5601:5601"
+    networks:
+      - tier1-net
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:21.1.1
+    container_name: tier1_keycloak
+    depends_on:
+      - elasticsearch   # (Keycloak не зависит от ES, можно убрать; если нужна БД, добавить Postgres)
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    command:
+      - start-dev    # запуск в dev-режиме с встроенной БД
+    ports:
+      - "8080:8080"
+    networks:
+      - tier1-net
+
+  ingest:
+    build:
+      context: ./backend/ingest
+      dockerfile: Dockerfile
+    container_name: tier1_ingest
+    depends_on:
+      - kafka
+      - minio
+      - elasticsearch
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - MINIO_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=admin12345
+      - ES_URL=http://elasticsearch:9200
+    ports:
+      - "8100:8100"   # эндпойнт приёма данных
+    networks:
+      - tier1-net
+
+  api:
+    build:
+      context: ./backend/api
+      dockerfile: Dockerfile
+    container_name: tier1_api
+    depends_on:
+      - elasticsearch
+      - minio
+      - keycloak
+    environment:
+      - MINIO_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=admin12345
+      - ES_URL=http://elasticsearch:9200
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      - KEYCLOAK_REALM=nica
+    ports:
+      - "8000:8000"   # REST API endpoints (/tasks, /data, /etc.)
+    networks:
+      - tier1-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tier1_frontend
+    depends_on:
+      - api
+      - keycloak
+    ports:
+      - "3000:80"    # веб-приложение (статически обслуживается nginx на 80 порту внутри)
+    networks:
+      - tier1-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tier1_prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - tier1-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tier1_grafana
+    depends_on:
+      - prometheus
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    networks:
+      - tier1-net
+
+networks:
+  tier1-net:
+    driver: bridge
+
+volumes:
+  minio-data:
+  es-data:

@@ -1,0 +1,4 @@
+fastapi       # Фреймворк для API
+uvicorn       # ASGI-сервер для запуска FastAPI
+minio         # Клиентская библиотека MinIO (S3 совместимое хранилище)
+kafka-python  # Библиотека для работы с Apache Kafka

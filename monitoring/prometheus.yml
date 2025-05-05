@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s    # как часто опрашивать все цели (по умолчанию 15с)
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Сбор метрик с ingest-сервиса
+  - job_name: 'ingest'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['ingest:8100']
+  # Сбор метрик с API-сервиса
+  - job_name: 'api'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['api:8000']
