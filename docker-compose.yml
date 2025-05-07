@@ -109,8 +109,9 @@ services:
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=admin12345
       - ES_URL=http://elasticsearch:9200
-      - KEYCLOAK_SERVER_URL=http://host.docker.internal:8080   # URL Keycloak для проверок токена
-      - KEYCLOAK_REALM=nica
+      - KEYCLOAK_SERVER_URL=http://host.docker.internal:8080  # правильный для проверки токена внутри контейнера
+      - KEYCLOAK_REALM=nica                                    # исправлено: должно совпадать с Realm name
+      - KEYCLOAK_AUDIENCE=tier1-frontend                        # (добавлено) для сверки audience токена
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
