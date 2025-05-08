@@ -5,3 +5,5 @@ kafka-python  # Библиотека для работы с Apache Kafka
 elasticsearch      
 requests 
 prometheus_fastapi_instrumentator
+python-jose[cryptography]
+pyjwt

@@ -1,87 +1,88 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 from elasticsearch import Elasticsearch
 from minio import Minio
-import os, requests
+from jose import jwt
+from jwt import PyJWKClient
+from jose.exceptions import JWTError
+import os
 
-# Конфигурация из переменных окружения
+# --- Конфигурация окружения ---
 ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200")
 MINIO_URL = os.getenv("MINIO_URL", "http://minio:9000")
 MINIO_ACCESS = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET = os.getenv("MINIO_SECRET_KEY", "admin12345")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_SERVER_URL", "http://keycloak:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "nica")
+KEYCLOAK_AUDIENCE = "tier1-frontend"  # client_id из Keycloak
 
-# Инициализация клиентов
+# --- Инициализация клиентов ---
 es = Elasticsearch(ES_URL)
-minio_client = Minio(MINIO_URL.replace("http://",""), access_key=MINIO_ACCESS,
+minio_client = Minio(MINIO_URL.replace("http://", ""), access_key=MINIO_ACCESS,
                      secret_key=MINIO_SECRET, secure=False)
 
 app = FastAPI(title="Tier-1 API")
 
-# Подключаем сбор метрик Prometheus
+# --- Метрики ---
 Instrumentator().instrument(app).expose(app)
 
-# Настраиваем CORS, чтобы фронтенд (http://localhost:3000) мог обращаться к API
+# --- CORS для фронтенда ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[ "http://localhost:3000" ],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Определяем схему аутентификации Bearer
+# --- JWT проверка ---
 bearer_scheme = HTTPBearer()
+JWKS_URL = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/certs"
+jwks_client = PyJWKClient(JWKS_URL)
 
-# Зависимость для проверки JWT через Keycloak
+def verify_token(token: str) -> dict:
+    try:
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        decoded = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            options={"verify_exp": True, "verify_aud": False}
+        )
+        return decoded
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
-    token = credentials.credentials
-    # Запрос к Keycloak UserInfo endpoint для проверки токена
-    resp = requests.get(f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/userinfo",
-                        headers={"Authorization": f"Bearer {token}"})
-    if resp.status_code != 200:
-        # Не удалось подтвердить токен
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
-    user_info = resp.json()
-    # Здесь можно извлечь информацию о пользователе (например, username)
-    return user_info
+    return verify_token(credentials.credentials)
 
-# Endpoint: список задач (с поиском)
+# --- Эндпоинты API ---
 @app.get("/tasks")
 async def list_tasks(q: str = None, current_user: dict = Depends(get_current_user)):
-    # Если задан параметр q, ищем по имени (full-text search)
-    if q:
-        # match по полю name
-        query_body = { "match": { "name": q } }
-    else:
-        query_body = { "match_all": {} }
+    query_body = {"match": {"name": q}} if q else {"match_all": {}}
     try:
         result = es.search(index="tasks", query=query_body, size=100)
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Search error")
     hits = result.get("hits", {}).get("hits", [])
-    tasks = [ hit["_source"] for hit in hits ]
+    tasks = [hit["_source"] for hit in hits]
     return tasks
 
-# Endpoint: получить информацию о конкретной задаче
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str, current_user: dict = Depends(get_current_user)):
     try:
         res = es.get(index="tasks", id=task_id)
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=404, detail="Task not found")
     task_doc = res.get("_source")
     if not task_doc:
         raise HTTPException(status_code=404, detail="Task not found")
     return task_doc
 
-# Endpoint: получить данные/файл задачи
 @app.get("/data/{task_id}")
 async def download_task_data(task_id: str, current_user: dict = Depends(get_current_user)):
-    # Получаем информацию о задаче, чтобы узнать имя объекта в MinIO
     try:
         res = es.get(index="tasks", id=task_id)
     except Exception:
@@ -93,25 +94,22 @@ async def download_task_data(task_id: str, current_user: dict = Depends(get_curr
     object_name = task_doc.get("object")
     if not object_name:
         raise HTTPException(status_code=500, detail="Object name not found in metadata")
-    # Генерируем presigned URL для скачивания
     try:
         url = minio_client.presigned_get_object(bucket, object_name, expires=3600)
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Error generating download URL")
-    return { "url": url }
+    return {"url": url}
 
-# Endpoint: получить список событий
 @app.get("/events")
 async def list_events(current_user: dict = Depends(get_current_user)):
     try:
         result = es.search(index="events", sort="timestamp:desc", size=100)
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Events search error")
     hits = result.get("hits", {}).get("hits", [])
-    events = [ hit["_source"] for hit in hits ]
+    events = [hit["_source"] for hit in hits]
     return events
 
-# Endpoint: проверка здоровья (доступен без токена)
 @app.get("/health")
 async def health():
     return {"status": "ok"}

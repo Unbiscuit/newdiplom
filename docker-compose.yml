@@ -5,14 +5,14 @@ services:
     image: bitnami/kafka:latest
     container_name: tier1_kafka
     environment:
-      - KAFKA_CFG_PROCESS_ROLES=broker,controller         # одиночный узел выполняет роль и брокера и контроллера
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
       - KAFKA_CFG_NODE_ID=1
       - KAFKA_KRAFT_CLUSTER_ID=cluster-1
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093   # используем имя сервиса kafka
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
       - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092   # явно рекламируем host kafka для клиентов
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
       - ALLOW_PLAINTEXT_LISTENER=yes
     ports:
       - "9092:9092"
@@ -27,8 +27,8 @@ services:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=admin12345
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # MinIO web console
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio-data:/data
     networks:
@@ -39,12 +39,12 @@ services:
     container_name: tier1_elasticsearch
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false     # отключаем безопасность для упрощения (без логина)
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m" # ограничение памяти JVM
-    volumes:
-      - es-data:/usr/share/elasticsearch/data
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
     ports:
       - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
     networks:
       - tier1-net
 
@@ -64,12 +64,10 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:21.1.1
     container_name: tier1_keycloak
-    # depends_on: [ ]    # Keycloak не зависит от ES
     environment:
       - KEYCLOAK_ADMIN=admin
       - KEYCLOAK_ADMIN_PASSWORD=admin
-    command:
-      - start-dev        # dev-режим с встроенной БД (Realm настроить вручную)
+    command: start-dev
     ports:
       - "8080:8080"
     networks:
@@ -81,11 +79,11 @@ services:
       dockerfile: Dockerfile
     container_name: tier1_ingest
     depends_on:
-      - kafka       # Kafka должна стартовать до ingest
+      - kafka
       - minio
       - elasticsearch
     environment:
-      - KAFKA_BOOTSTRAP=kafka:9092        # имя хоста соответствует сервису Kafka
+      - KAFKA_BOOTSTRAP=kafka:9092
       - MINIO_URL=http://minio:9000
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=admin12345
@@ -109,11 +107,8 @@ services:
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=admin12345
       - ES_URL=http://elasticsearch:9200
-      - KEYCLOAK_SERVER_URL=http://host.docker.internal:8080  # правильный для проверки токена внутри контейнера
-      - KEYCLOAK_REALM=nica                                    # исправлено: должно совпадать с Realm name
-      - KEYCLOAK_AUDIENCE=tier1-frontend                        # (добавлено) для сверки audience токена
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080  # Больше НЕ нужно host.docker.internal
+      - KEYCLOAK_REALM=nica
     ports:
       - "8000:8000"
     networks:
