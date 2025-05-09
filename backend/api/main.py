@@ -1,13 +1,19 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 from elasticsearch import Elasticsearch
 from minio import Minio
-from jose import jwt
+from jose import jwt, JWTError
+from jose.exceptions import ExpiredSignatureError
 from jwt import PyJWKClient
-from jose.exceptions import JWTError
+from datetime import timedelta
 import os
+import logging
+
+# --- Логгирование ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Конфигурация окружения ---
 ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200")
@@ -16,7 +22,6 @@ MINIO_ACCESS = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET = os.getenv("MINIO_SECRET_KEY", "admin12345")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_SERVER_URL", "http://keycloak:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "nica")
-KEYCLOAK_AUDIENCE = "tier1-frontend"  # client_id из Keycloak
 
 # --- Инициализация клиентов ---
 es = Elasticsearch(ES_URL)
@@ -28,7 +33,7 @@ app = FastAPI(title="Tier-1 API")
 # --- Метрики ---
 Instrumentator().instrument(app).expose(app)
 
-# --- CORS для фронтенда ---
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -37,7 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- JWT проверка ---
+# --- JWT ---
 bearer_scheme = HTTPBearer()
 JWKS_URL = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/certs"
 jwks_client = PyJWKClient(JWKS_URL)
@@ -49,66 +54,73 @@ def verify_token(token: str) -> dict:
             token,
             signing_key.key,
             algorithms=["RS256"],
-            options={"verify_exp": True, "verify_aud": False}
+            options={"verify_exp": True, "verify_aud": False},
         )
+        logger.info("Token verified successfully: %s", decoded.get("sub"))
         return decoded
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except ExpiredSignatureError:
+        logger.warning("Token expired")
+        raise HTTPException(status_code=401, detail="Token expired")
+    except JWTError as e:
+        logger.error("JWT verification failed: %s", str(e))
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
     return verify_token(credentials.credentials)
 
-# --- Эндпоинты API ---
+# --- Endpoints ---
+
 @app.get("/tasks")
 async def list_tasks(q: str = None, current_user: dict = Depends(get_current_user)):
     query_body = {"match": {"name": q}} if q else {"match_all": {}}
     try:
         result = es.search(index="tasks", query=query_body, size=100)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Search error")
-    hits = result.get("hits", {}).get("hits", [])
-    tasks = [hit["_source"] for hit in hits]
-    return tasks
+        hits = result.get("hits", {}).get("hits") or []
+        tasks = [hit["_source"] for hit in hits]
+        return tasks
+    except Exception as e:
+        logger.exception("Elasticsearch task search error")
+        raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
 
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str, current_user: dict = Depends(get_current_user)):
     try:
         res = es.get(index="tasks", id=task_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Task not found")
-    task_doc = res.get("_source")
-    if not task_doc:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task_doc
+        task_doc = res.get("_source")
+        if not task_doc:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return task_doc
+    except Exception as e:
+        logger.exception("Error getting task")
+        raise HTTPException(status_code=404, detail=f"Task not found: {str(e)}")
 
 @app.get("/data/{task_id}")
 async def download_task_data(task_id: str, current_user: dict = Depends(get_current_user)):
     try:
         res = es.get(index="tasks", id=task_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Task not found")
-    task_doc = res.get("_source")
-    if not task_doc:
-        raise HTTPException(status_code=404, detail="Task not found")
-    bucket = "tasks"
-    object_name = task_doc.get("object")
-    if not object_name:
-        raise HTTPException(status_code=500, detail="Object name not found in metadata")
-    try:
-        url = minio_client.presigned_get_object(bucket, object_name, expires=3600)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Error generating download URL")
-    return {"url": url}
+        task_doc = res.get("_source")
+        if not task_doc:
+            raise HTTPException(status_code=404, detail="Task not found")
+        object_name = task_doc.get("object")
+        if not object_name:
+            raise HTTPException(status_code=500, detail="Missing object name in task metadata")
+        url = minio_client.presigned_get_object("tasks", object_name, expires=timedelta(seconds=3600))
+        url = url.replace("http://minio:9000", "http://localhost:9000")
+        return {"url": url}
+    except Exception as e:
+        logger.exception("MinIO presigned URL error")
+        raise HTTPException(status_code=500, detail=f"Failed to generate download URL: {str(e)}")
 
 @app.get("/events")
 async def list_events(current_user: dict = Depends(get_current_user)):
     try:
         result = es.search(index="events", sort="timestamp:desc", size=100)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Events search error")
-    hits = result.get("hits", {}).get("hits", [])
-    events = [hit["_source"] for hit in hits]
-    return events
+        hits = result.get("hits", {}).get("hits") or []
+        events = [hit["_source"] for hit in hits]
+        return events
+    except Exception as e:
+        logger.exception("Elasticsearch events search error")
+        raise HTTPException(status_code=500, detail=f"Events search error: {str(e)}")
 
 @app.get("/health")
 async def health():
