@@ -7,6 +7,7 @@ from minio import Minio
 from jose import jwt, JWTError
 from jose.exceptions import ExpiredSignatureError
 from jwt import PyJWKClient
+from fastapi.responses import StreamingResponse
 from datetime import timedelta
 import os
 import logging
@@ -95,21 +96,26 @@ async def get_task(task_id: str, current_user: dict = Depends(get_current_user))
         raise HTTPException(status_code=404, detail=f"Task not found: {str(e)}")
 
 @app.get("/data/{task_id}")
-async def download_task_data(task_id: str, current_user: dict = Depends(get_current_user)):
+async def stream_task_data(task_id: str, current_user: dict = Depends(get_current_user)):
     try:
         res = es.get(index="tasks", id=task_id)
         task_doc = res.get("_source")
         if not task_doc:
             raise HTTPException(status_code=404, detail="Task not found")
+
         object_name = task_doc.get("object")
+        filename = task_doc.get("filename", "data.bin")
+
         if not object_name:
             raise HTTPException(status_code=500, detail="Missing object name in task metadata")
-        url = minio_client.presigned_get_object("tasks", object_name, expires=timedelta(seconds=3600))
-        url = url.replace("http://minio:9000", "http://localhost:9000")
-        return {"url": url}
+
+        stream = minio_client.get_object("tasks", object_name)
+        return StreamingResponse(stream, media_type="application/octet-stream", headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        })
     except Exception as e:
-        logger.exception("MinIO presigned URL error")
-        raise HTTPException(status_code=500, detail=f"Failed to generate download URL: {str(e)}")
+        logger.exception("MinIO streaming error")
+        raise HTTPException(status_code=500, detail=f"Streaming error: {str(e)}")
 
 @app.get("/events")
 async def list_events(current_user: dict = Depends(get_current_user)):

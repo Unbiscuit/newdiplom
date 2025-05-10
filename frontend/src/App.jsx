@@ -19,7 +19,6 @@ function App() {
         setKeycloak(kc);
         setToken(kc.token);
         console.log("TOKEN:", kc.token);
-        // Настраиваем автообновление токена
         setInterval(() => {
           kc.updateToken(30).then(refreshed => {
             if (refreshed) {
@@ -65,10 +64,17 @@ function App() {
       const res = await fetch(`http://localhost:8000/data/${taskId}`, {
         headers: { 'Authorization': 'Bearer ' + token }
       });
-      const data = await res.json();
-      if (data.url) {
-        window.open(data.url, '_blank');
-      }
+      if (!res.ok) throw new Error("Download failed: " + res.status);
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = "example.txt";  // имя можно также взять из task.filename при желании
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Download failed", err);
     }

@@ -152,6 +152,14 @@ services:
     networks:
       - tier1-net
 
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: tier1_node_exporter
+    ports:
+      - "9100:9100"
+    networks:
+      - tier1-net
+
 networks:
   tier1-net:
     driver: bridge
