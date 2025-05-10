@@ -1,0 +1,87 @@
+{
+  "title": "FastAPI Metrics",
+  "uid": "fastapi-metrics",
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "HTTP Requests by Method",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by(method) (http_requests_total)",
+          "legendFormat": "{{method}}",
+          "interval": ""
+        }
+      ],
+      "xaxis": {
+        "mode": "time"
+      },
+      "yaxes": [
+        {
+          "format": "short"
+        },
+        {
+          "format": "short"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Request Duration (Histogram)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(http_request_duration_seconds_bucket[1m])",
+          "legendFormat": "{{le}}"
+        }
+      ],
+      "xaxis": {
+        "mode": "time"
+      },
+      "yaxes": [
+        {
+          "format": "s"
+        },
+        {
+          "format": "short"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "HTTP Requests by Status",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by(status) (http_requests_total)",
+          "legendFormat": "status={{status}}"
+        }
+      ],
+      "xaxis": {
+        "mode": "time"
+      },
+      "yaxes": [
+        {
+          "format": "short"
+        },
+        {
+          "format": "short"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Total Requests",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(http_requests_total)"
+        }
+      ]
+    }
+  ]
+}
