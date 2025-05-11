@@ -3,5 +3,5 @@ uvicorn
 prometheus-fastapi-instrumentator
 minio
 confluent-kafka
-elasticsearch
+elasticsearch<9.0.0,>=8.0.0     
 python-multipart
