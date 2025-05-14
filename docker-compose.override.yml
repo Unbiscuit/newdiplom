@@ -1,0 +1,62 @@
+services:
+  kafka2:
+    image: bitnami/kafka:latest
+    container_name: tier1_kafka2
+    environment:
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_NODE_ID=2
+      - KAFKA_KRAFT_CLUSTER_ID=cluster-2
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=2@kafka2:9093
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka2:9092
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - "9093:9092"
+    networks:
+      - tier1-net
+
+  elasticsearch2:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.0
+    container_name: tier1_elasticsearch2
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9201:9200"
+      - "9301:9300"
+    volumes:
+      - es-data2:/usr/share/elasticsearch/data
+    networks:
+      - tier1-net
+
+  mm2-connect:
+    image: confluentinc/cp-kafka-connect:latest
+    container_name: tier1_mm2_connect
+    depends_on:
+      - kafka
+      - kafka2
+    environment:
+      - CONNECT_BOOTSTRAP_SERVERS=kafka:9092,kafka2:9092
+      - CONNECT_REST_PORT=8083
+      - CONNECT_REST_ADVERTISED_HOST_NAME=localhost
+      - CONNECT_GROUP_ID=mm2_group
+      - CONNECT_CONFIG_STORAGE_TOPIC=mm2_config
+      - CONNECT_OFFSET_STORAGE_TOPIC=mm2_offset
+      - CONNECT_STATUS_STORAGE_TOPIC=mm2_status
+      - CONNECT_KEY_CONVERTER=org.apache.kafka.connect.storage.StringConverter
+      - CONNECT_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE=false
+    volumes:
+      - ./config/connect-mirror-maker.properties:/etc/kafka/connect-mirror-maker.properties
+      - ./config/consumer.properties:/etc/kafka/consumer.properties
+      - ./config/producer.properties:/etc/kafka/producer.properties
+    ports:
+      - "8083:8083"
+    networks:
+      - tier1-net
+
+volumes:
+  es-data2:
